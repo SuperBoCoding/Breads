@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kakao Map – Franchise Radius Averages</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="config.js"></script>
+  <script>
+    (function () {
+      if (!window.KAKAO_APP_KEY || window.KAKAO_APP_KEY === "YOUR_JAVASCRIPT_KEY_HERE") {
+        alert("config.js 에 Kakao JavaScript 키를 설정하세요.");
+      }
+      const s = document.createElement("script");
+      s.src = "https://dapi.kakao.com/v2/maps/sdk.js?appkey=" +
+              encodeURIComponent(window.KAKAO_APP_KEY) +
+              "&autoload=false&libraries=clusterer";
+      s.onload = () => kakao.maps.load(initApp);
+      s.onerror = () => alert("Kakao SDK 로드 실패: 키/허용도메인/네트워크 확인");
+      document.head.appendChild(s);
+    })();
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <h1>Franchise Radius Averages</h1>
+
+      <div class="block">
+        <label>반경(미터)</label>
+        <input id="radiusInput" type="number" min="50" step="50" value="500" />
+        <label class="inline"><input id="toggleCircles" type="checkbox" checked /> 원 표시</label>
+      </div>
+
+      <div class="block">
+        <label>프랜차이즈 선택</label>
+        <div id="brandChecks" class="radio-row" style="flex-wrap:wrap; gap:8px;">
+          <label class="legend-item"><span class="dot dot-dunkin"></span><input type="checkbox" value="dunkin" checked> 던킨</label>
+          <label class="legend-item"><span class="dot dot-paris"></span><input type="checkbox" value="paris" checked> 파리바게뜨</label>
+          <label class="legend-item"><span class="dot dot-pariscr"></span><input type="checkbox" value="pariscr" checked> 파리크라상</label>
+          <label class="legend-item"><span class="dot dot-tlj"></span><input type="checkbox" value="tlj" checked> 뚜레쥬르</label>
+        </div>
+        <div style="margin-top:6px">
+          <button id="selectAllBtn" class="secondary">모두 선택</button>
+          <button id="clearAllBtn" class="secondary">모두 해제</button>
+        </div>
+      </div>
+
+      <div class="block">
+        <button id="analyzeBtn">분석하기</button>
+        <button id="showAllBtn" class="secondary">일반 빵집 모두 표시</button>
+      </div>
+
+      <div class="block">
+        <h2>매장으로 이동</h2>
+        <div class="row">
+          <select id="jumpBrand">
+            <option value="dunkin">던킨</option>
+            <option value="paris" selected>파리바게뜨</option>
+            <option value="pariscr">파리크라상</option>
+            <option value="tlj">뚜레쥬르</option>
+          </select>
+        </div>
+        <div class="row" style="gap:6px;">
+          <input id="storeSearch" placeholder="매장명 일부 입력" />
+          <select id="storeSelect" size="6" style="flex:1; min-width:220px;"></select>
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <button id="goBtn">이 지점으로 이동</button>
+          <span id="jumpInfo" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="block">
+        <h2>요약</h2>
+        <div id="summary"></div>
+        <div id="overall" style="margin-top:6px;"></div>
+        <div id="circleInfo" class="muted" style="margin-top:4px;"></div>
+      </div>
+
+      <div class="block tip">
+        <p>서버는 <b>web</b> 폴더에서 실행: <code>python -m http.server 8080 --bind 127.0.0.1</code></p>
+        <p>허용 도메인: <code>http://127.0.0.1:8080</code>, <code>http://localhost:8080</code></p>
+      </div>
+    </aside>
+    <main id="map"></main>
+  </div>
+
+  <script>
+    // ---------- 스타일/유틸 ----------
+    const BRAND_STYLE = {
+      dunkin:  { label: "던킨",       color: "#ff7f0e" },
+      paris:   { label: "파리바게뜨", color: "#1f77b4" },
+      pariscr: { label: "파리크라상", color: "#8a2be2" },
+      tlj:     { label: "뚜레쥬르",   color: "#2ca02c" },
+    };
+    const MAX_CIRCLES = 2000; // 원 표시 상한(성능 보호)
+
+    function distanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000, toRad = d => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+    function qs(s){return document.querySelector(s)}
+    function qsa(s){return Array.from(document.querySelectorAll(s))}
+
+    // General bakery: tiny dot marker
+    function smallDotMarkerImage() {
+      const svg = `<svg width="8" height="8" viewBox="0 0 8 8" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="4" cy="4" r="3" fill="#444"/></svg>`;
+      const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+      return new kakao.maps.MarkerImage(url, new kakao.maps.Size(8,8), {offset: new kakao.maps.Point(4,4)});
+    }
+    // Franchise colored pin
+    function pinImage(color) {
+      const svg = `<svg width="28" height="40" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg">
+        <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="${color}"/>
+        <circle cx="14" cy="14" r="6" fill="#fff"/></svg>`;
+      const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+      return new kakao.maps.MarkerImage(url, new kakao.maps.Size(28,40), {offset: new kakao.maps.Point(14,40)});
+    }
+
+    // ---------- 간단한 격자 인덱스(반경 검색 가속) ----------
+    class GridIndex {
+      constructor(points, cellDeg=0.01) { // 대략 1km(위도 기준)
+        this.cell = cellDeg;
+        this.b = new Map(); // "iy|ix" -> [index...]
+        for (let i=0;i<points.length;i++){
+          const p = points[i];
+          const iy = Math.floor(p.lat / this.cell);
+          const ix = Math.floor(p.lon / this.cell);
+          const k = iy + '|' + ix;
+          if(!this.b.has(k)) this.b.set(k, []);
+          this.b.get(k).push(i);
+        }
+      }
+      cand(lat, lon, radius){
+        const dLat = radius/111000;
+        const dLon = radius/(111000 * Math.max(Math.cos(lat*Math.PI/180), 0.1));
+        const minY = Math.floor((lat - dLat) / this.cell);
+        const maxY = Math.floor((lat + dLat) / this.cell);
+        const minX = Math.floor((lon - dLon) / this.cell);
+        const maxX = Math.floor((lon + dLon) / this.cell);
+        const out = [];
+        for(let iy=minY; iy<=maxY; iy++){
+          for(let ix=minX; ix<=maxX; ix++){
+            const k = iy+'|'+ix;
+            if(this.b.has(k)) out.push(...this.b.get(k));
+          }
+        }
+        return out;
+      }
+    }
+
+    // ---------- 상태 ----------
+    let map, placeClusterer, brandClusterer;
+    let places = [];                 // all bakeries
+    let franchises = {};             // {key:{label,stores:[]}}
+    let allPlaceMarkers = [];        // 일반 빵집 마커(점)
+    let brandMarkers = [];           // 프랜차이즈 마커
+    let brandCircles = [];           // 프랜차이즈 원
+    let infoWin;                     // 일반 빵집 이름 팝업
+    let gridIndex;                   // places용 격자 인덱스
+    let lastAnalyzed = { brands:[], radius:0 };
+
+    // ---------- 초기화 ----------
+    function initApp() {
+      map = new kakao.maps.Map(document.getElementById("map"), {
+        center: new kakao.maps.LatLng(37.5665, 126.9780),
+        level: 7
+      });
+      placeClusterer = new kakao.maps.MarkerClusterer({ map, averageCenter:true, minLevel:7 });
+      brandClusterer = new kakao.maps.MarkerClusterer({ map, averageCenter:true, minLevel:7 });
+      infoWin = new kakao.maps.InfoWindow({ removable: true });
+
+      Promise.all([
+        fetch("places.json?ts="+Date.now()).then(r=>r.json()),
+        fetch("franchises.json?ts="+Date.now()).then(r=>r.json())
+      ]).then(([p, f])=>{
+        places = Array.isArray(p) ? p : [];
+        franchises = f || {};
+        gridIndex = new GridIndex(places, 0.01);
+        addPlaceMarkers();
+        fitBoundsToMarkers(allPlaceMarkers);
+        wireUI();
+        // 점(일반 빵집) 클릭 시 이름만 표시
+        map.addListener("zoom_changed", ()=>{}); // 필요시 레벨별 표시제어 확장 가능
+      }).catch(e=>{ console.error(e); alert("데이터 로드 실패"); });
+    }
+
+    function addPlaceMarkers() {
+      const img = smallDotMarkerImage();
+      allPlaceMarkers = places.map(p => {
+        const m = new kakao.maps.Marker({
+          position: new kakao.maps.LatLng(p.lat, p.lon),
+          title: p.name,
+          image: img
+        });
+        kakao.maps.event.addListener(m, "click", ()=>{
+          const content = `<div style="padding:6px 8px">${p.name}</div>`;
+          infoWin.setContent(content);
+          infoWin.open(map, m);
+        });
+        return m;
+      });
+      placeClusterer.addMarkers(allPlaceMarkers);
+    }
+
+    function fitBoundsToMarkers(markers) {
+      const bounds = new kakao.maps.LatLngBounds();
+      (markers||[]).forEach(m => bounds.extend(m.getPosition()));
+      if (!bounds.isEmpty()) map.setBounds(bounds);
+    }
+
+    function wireUI() {
+      qs("#selectAllBtn").onclick = () => qsa('#brandChecks input[type="checkbox"]').forEach(c=>c.checked=true);
+      qs("#clearAllBtn").onclick  = () => qsa('#brandChecks input[type="checkbox"]').forEach(c=>c.checked=false);
+      qs("#analyzeBtn").onclick   = analyzeAverages;
+      qs("#showAllBtn").onclick   = () => { placeClusterer.clear(); placeClusterer.addMarkers(allPlaceMarkers); };
+
+      // 이동 UI
+      qs("#jumpBrand").onchange   = refreshStoreList;
+      qs("#storeSearch").oninput  = refreshStoreList;
+      qs("#goBtn").onclick        = jumpToSelectedStore;
+
+      // 원 표시 토글
+      qs("#toggleCircles").onchange = () => brandCircles.forEach(c => c.setMap(qs("#toggleCircles").checked ? map : null));
+
+      // 최초 목록 구성
+      refreshStoreList();
+    }
+
+    function selectedBrands() {
+      return qsa('#brandChecks input[type="checkbox"]:checked').map(c=>c.value);
+    }
+
+    // ---------- 분석: 브랜드별 평균 ----------
+    function analyzeAverages() {
+      const brands = selectedBrands();
+      const radius = parseFloat(qs("#radiusInput").value || "500");
+      if (!brands.length) { alert("프랜차이즈를 선택하세요."); return; }
+
+      // 이전 표시 초기화
+      brandClusterer.clear();
+      brandMarkers.forEach(m => m.setMap(null));
+      brandMarkers = [];
+      brandCircles.forEach(c => c.setMap(null));
+      brandCircles = [];
+
+      // 집계
+      const perBrand = {}; // key -> {stores:N, sum:N, avg:...}
+      let globalStores = 0, globalSum = 0;
+
+      let drawn = 0, totalStores = 0;
+
+      brands.forEach(b => {
+        const style = BRAND_STYLE[b] || { color:"#333", label:b };
+        const pin   = pinImage(style.color);
+        const stores = (franchises[b] && franchises[b].stores) ? franchises[b].stores : [];
+        totalStores += stores.length;
+
+        let sum = 0;
+        for (const s of stores) {
+          // 후보 가져오기(격자)
+          const candIdx = gridIndex.cand(s.lat, s.lon, radius);
+          let cnt = 0;
+          for (const i of candIdx) {
+            const p = places[i];
+            if (distanceMeters(p.lat, p.lon, s.lat, s.lon) <= radius) cnt++;
+          }
+          sum += cnt;
+
+          // 마커/원 그리기
+          const m = new kakao.maps.Marker({
+            position: new kakao.maps.LatLng(s.lat, s.lon),
+            title: `${style.label} - ${s.name || ""}`,
+            image: pin
+          });
+          brandMarkers.push(m);
+
+          if (drawn < MAX_CIRCLES) {
+            const circle = new kakao.maps.Circle({
+              center: new kakao.maps.LatLng(s.lat, s.lon),
+              radius: radius,
+              strokeWeight: 2,
+              strokeColor: style.color,
+              strokeOpacity: 0.9,
+              fillColor: style.color,
+              fillOpacity: 0.12
+            });
+            circle.setMap(qs("#toggleCircles").checked ? map : null);
+            brandCircles.push(circle);
+            drawn++;
+          }
+        }
+        const avg = stores.length ? (sum / stores.length) : 0;
+        perBrand[b] = { label: style.label, stores: stores.length, sum, avg };
+        globalStores += stores.length;
+        globalSum    += sum;
+      });
+
+      brandClusterer.addMarkers(brandMarkers);
+
+      // 요약 출력
+      const lines = Object.keys(perBrand).map(k=>{
+        const o = perBrand[k];
+        return `${o.label}: <b>${o.avg.toFixed(2)}</b> 개 (매장 ${o.stores}곳)`;
+      });
+      qs("#summary").innerHTML = lines.join("<br/>");
+
+      const overallAvg = globalStores ? (globalSum / globalStores) : 0;
+      qs("#overall").innerHTML = `<b>선택 프랜차이즈 전체 평균:</b> ${overallAvg.toFixed(2)} 개 (총 매장 ${globalStores}곳)`;
+
+      const info = (totalStores > MAX_CIRCLES)
+        ? `원은 성능을 위해 <b>${MAX_CIRCLES}</b>개만 표시 (총 ${totalStores}개 중)`
+        : `원 표시: ${drawn}개`;
+      qs("#circleInfo").innerHTML = info;
+
+      lastAnalyzed = { brands, radius };
+    }
+
+    // ---------- 매장 이동 ----------
+    function refreshStoreList() {
+      const brand = qs("#jumpBrand").value;
+      const q = (qs("#storeSearch").value || "").trim().toLowerCase();
+      const sel = qs("#storeSelect");
+      sel.innerHTML = "";
+      const stores = (franchises[brand] && franchises[brand].stores) ? franchises[brand].stores : [];
+      let matches = stores;
+      if (q) matches = stores.filter(s => (s.name||"").toLowerCase().includes(q));
+      // 너무 길면 상위 500개만
+      matches.slice(0, 500).forEach((s, idx) => {
+        const opt = document.createElement("option");
+        opt.value = String(idx);
+        opt.textContent = s.name || "(이름 없음)";
+        sel.appendChild(opt);
+      });
+      qs("#jumpInfo").textContent = `총 ${stores.length}개 / 표시 ${Math.min(500, matches.length)}개`;
+      sel.dataset.offset = "0"; // 간단화(매칭 인덱스가 그대로 idx인 가정)
+      sel.dataset.brand = brand;
+      sel.dataset.query = q;
+    }
+
+    function jumpToSelectedStore() {
+      const sel = qs("#storeSelect");
+      const brand = qs("#jumpBrand").value;
+      const stores = (franchises[brand] && franchises[brand].stores) ? franchises[brand].stores : [];
+      const idx = parseInt(sel.value, 10);
+      if (Number.isNaN(idx) || !stores[idx]) { alert("매장을 선택하세요."); return; }
+      const s = stores[idx];
+      const r = parseFloat(qs("#radiusInput").value || "500");
+
+      map.setCenter(new kakao.maps.LatLng(s.lat, s.lon));
+      map.setLevel(4);
+
+      // 포커스 원 하나만 추가(기존 것 유지)
+      const color = (BRAND_STYLE[brand] && BRAND_STYLE[brand].color) || "#333";
+      const circle = new kakao.maps.Circle({
+        center: new kakao.maps.LatLng(s.lat, s.lon),
+        radius: r,
+        strokeWeight: 3,
+        strokeColor: color,
+        strokeOpacity: 1,
+        fillColor: color,
+        fillOpacity: 0.18
+      });
+      circle.setMap(qs("#toggleCircles").checked ? map : null);
+      brandCircles.push(circle);
+
+      // 즉석 카운트(선택 매장 반경 내 일반 빵집 수)
+      const candIdx = gridIndex.cand(s.lat, s.lon, r);
+      let cnt = 0;
+      for (const i of candIdx) {
+        const p = places[i];
+        if (distanceMeters(p.lat, p.lon, s.lat, s.lon) <= r) cnt++;
+      }
+      qs("#overall").innerHTML = `<b>이 지점 반경 내 일반 빵집:</b> ${cnt} 개`;
+    }
+  </script>
+</body>
+</html>

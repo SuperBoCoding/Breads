@@ -1,0 +1,83 @@
+/* ===== Base ===== */
+* { box-sizing: border-box; }
+:root {
+  --border: #e5e7eb;
+  --bg: #ffffff;
+  --text: #111827;
+  --muted: #6b7280;
+  --primary: #2563eb;
+  --secondary: #6b7280;
+}
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+#app {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  height: 100vh;
+}
+#map { width: 100%; height: 100vh; }
+
+/* ===== Sidebar & Blocks ===== */
+.sidebar {
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.sidebar h1 { margin: 0 0 12px; font-size: 18px; }
+.block { margin-bottom: 16px; }
+.block label { display: block; font-weight: 600; margin-bottom: 6px; }
+
+.block input[type="number"],
+.block input[type="text"],
+.block input[type="search"],
+.block select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 14px;
+}
+.radio-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+
+button {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+button.secondary { background: var(--secondary); }
+button:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ===== Lists / text helpers ===== */
+#storeSelect { height: 160px; min-width: 220px; }
+#summary b, #overall b { font-weight: 700; }
+.block.tip { font-size: 12px; color: var(--muted); }
+.muted { color: var(--muted); font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+
+/* ===== Brand legends (색상 표시 점) ===== */
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot-dunkin  { background: #ff7f0e; }
+.dot-paris   { background: #1f77b4; }
+.dot-pariscr { background: #8a2be2; }
+.dot-tlj     { background: #2ca02c; }
+.inline { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
+
+/* ===== Misc ===== */
+ol { margin: 0; padding-left: 18px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 980px) {
+  #app { grid-template-columns: 1fr; }
+  #map { height: 60vh; }
+}
